@@ -1,11 +1,12 @@
-# bot.py (正式版 V9.7 - 零延遲極速版)
+# bot.py (正式版 V14.0 - 世紀大發現版)
+# 基於您的發現：網頁會自動刷新，且 CDP 監聽器可以成功攔截！
 
 import asyncio
 import nodriver as uc
 import random
 import time
 import os
-import ctypes
+from datetime import datetime
 from config import WANTED_TICKET_COUNT, WANTED_AREA_KEYWORD, Selector, TARGET_TIME, TIME_WATCH_URL, AREA_AUTO_SELECT_MODE, ENABLE_TIME_WATCHER
 from timeWatcher import TimeWatcher
 from captchaAI.predict import solve_captcha_nodriver
@@ -26,15 +27,8 @@ async def check_pause():
 async def random_sleep(min_s=0.3, max_s=0.8):
     await asyncio.sleep(random.uniform(min_s, max_s))
 
-def send_os_enter():
-    """OS 物理按鍵 (Enter)"""
-    try:
-        ctypes.windll.user32.keybd_event(0x0D, 0, 0, 0)      # 按下
-        time.sleep(0.03) # [優化] 按壓時間縮短，提升頻率
-        ctypes.windll.user32.keybd_event(0x0D, 0, 0x0002, 0) # 放開
-    except: pass
-
 async def pre_fill_form(tab):
+    """預填表單"""
     num = WANTED_TICKET_COUNT
     js = f"""
     (function() {{
@@ -57,12 +51,11 @@ async def pre_fill_form(tab):
 
 async def submit_order_nodriver(tab, captcha_code: str):
     """
-    提交訂單 + 1秒轟炸 (完全依照您的指示)
+    提交訂單 (V14.0 簡化版)
+    只負責填寫與點擊，彈窗攔截交給全域監聽器 (alert_handler)
     """
     if not captcha_code: return False
-    
     try:
-        # 1. 填寫
         fill_js = f"""
         (function() {{
             var input = document.getElementById('{Selector.CAPTCHA_INPUT[1]}');
@@ -72,6 +65,7 @@ async def submit_order_nodriver(tab, captcha_code: str):
                 
                 var btn = document.querySelector('button[type="submit"]');
                 if (btn) {{
+                    // 使用 setTimeout 非同步點擊，讓 Python 不會被卡住，監聽器才能運作
                     setTimeout(() => btn.click(), 0);
                     return true; 
                 }}
@@ -80,31 +74,24 @@ async def submit_order_nodriver(tab, captcha_code: str):
         }})()
         """
         await tab.evaluate(fill_js)
-        
-        # 2. [階段一] 狂按 Enter 1 秒 (處理驗證碼錯誤彈窗)
-        # 這段時間是必要的，因為如果真的有彈窗，必須要在這裡解決
-        start_time = time.time()
-        while time.time() - start_time < 1.0:
-            send_os_enter()
-            await asyncio.sleep(0.1) # 保持高頻轟炸
-            
         return True
     except Exception as e:
         print(f"❌ 提交異常: {e}")
         return False
 
 async def refresh_captcha_nodriver(tab):
+    """手動刷新驗證碼"""
     try:
-        send_os_enter() # 清場
+        # 點擊圖片刷新
         await tab.evaluate(f"document.getElementById('{Selector.CAPTCHA_IMAGE[1]}').click();")
-        # [優化] 縮短等待，假設網路夠快
-        await asyncio.sleep(0.1)
+        # print("🔄 刷新驗證碼")
+        await asyncio.sleep(0.3)
         return True
     except: pass
     return False
 
 # ----------------------------------------------------
-# 頁面處理器 (移除所有不必要的 sleep)
+# 頁面處理器
 # ----------------------------------------------------
 
 async def handle_game_page(tab):
@@ -134,22 +121,21 @@ async def handle_game_page(tab):
         return false;
     })();
     """
-    is_clicked = await tab.evaluate(scan_js)
-    
-    if is_clicked:
-        print("🔥 [場次頁] 點擊成功！")
-        await asyncio.sleep(0.2)
-        # [核心修正] 移除 await asyncio.sleep(0.5)
-        # 點了就跑，讓主迴圈去偵測跳轉
-    else:
-        await tab.reload()
-        # await tab.wait_for("body") # reload 自帶等待，這裡可以拿掉
+    # 3次微重試
+    for _ in range(3):
+        if await tab.evaluate(scan_js):
+            print("🔥 [場次頁] 點擊成功！")
+            await asyncio.sleep(0.5)
+            return
+        await asyncio.sleep(0.1)
+
+    await tab.reload()
+    await tab.wait_for("body")
 
 async def handle_area_page(tab):
     await check_pause()
     strategy = AREA_AUTO_SELECT_MODE
     print(f"🎯 [選區頁] 策略: {strategy}...")
-    
     try: await tab.wait_for(".select_form_a, .select_form_b, .zone", timeout=1)
     except: return
 
@@ -185,13 +171,9 @@ async def handle_area_page(tab):
         return false;
     }})()
     """
-    is_clicked = await tab.evaluate(js_script)
-    
-    if is_clicked:
+    if await tab.evaluate(js_script):
         print("🔥 [選區頁] 點擊成功！")
-        await asyncio.sleep(0.1)
-        # [核心修正] 移除 await asyncio.sleep(0.2)
-        # 點擊後立刻回傳，讓主迴圈去抓下一頁
+        await asyncio.sleep(0.2) 
     else:
         print(f"⚠️ [選區頁] 無票，冷卻 7 秒...")
         await tab.reload()
@@ -201,58 +183,77 @@ async def handle_ticket_page(tab):
     await check_pause()
     print("📝 [填單頁] 處理中...")
     
-    # [維持] 進場不刷新圖片
+    # 不強制刷新，保留第一張圖
     
     await pre_fill_form(tab)
     captcha_code = await solve_captcha_nodriver(tab)
-    
     await check_pause()
 
     if captcha_code and len(captcha_code) == 4:
         print(f"🚀 送出: {captcha_code}")
         
-        # 執行送出 + 1秒轟炸
+        # 只負責點擊，如果有彈窗，alert_handler 會秒殺它
         await submit_order_nodriver(tab, captcha_code)
         
-        # 轟炸完立刻檢查
+        # 等待 0.5 秒檢查結果
+        await asyncio.sleep(0.5)
+        
         try:
             current_url = await tab.evaluate("window.location.href")
-            
-            # 情況 A: 進入轉圈圈 (/ticket/order)
-            # -> 結束此函式，交給 main.py 的轉圈圈邏輯 (無限 Enter)
-            if "/ticket/order" in current_url:
-                return
-
-            # 情況 B: 還在原頁面 (/ticket/ticket)
-            # -> 代表驗證碼錯了，且彈窗已被 1 秒轟炸按掉
-            # -> 圖片已自動換新，直接 return，讓主迴圈重新進來填寫
             if "/ticket/ticket" in current_url:
-                print("⚠️ 驗證碼錯誤 (已按 Enter)，原地重試...")
+                # 網址沒變 = 失敗 (彈窗已被監聽器按掉)
+                print("⚠️ 驗證碼錯誤 (Alert已攔截)，原地重試...")
+                # 因為彈窗關閉後，拓元通常會自動刷新驗證碼，所以我們不需要手動刷新
+                # 直接 return，讓 main loop 再次進來辨識新圖即可
                 return 
-
-        except:
-            pass
-            
+        except: pass
     else:
-        print(f"⚠️ 辨識失敗，刷新...")
+        print(f"⚠️ 辨識失敗，手動刷新...")
         await refresh_captcha_nodriver(tab)
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.2)
 
 # ----------------------------------------------------
-# 啟動流程
+# 啟動流程 (核心修改：加入 Alert 監聽器)
 # ----------------------------------------------------
 
 async def run_initial_setup():
-    print("🚀 啟動 nodriver (V9.7 零延遲極速版)...")
+    print("🚀 啟動 nodriver (V14.0 世紀大發現版)...")
     
     import os
     user_data_dir = os.path.abspath("./chrome_profile")
+
+    
     browser = await uc.start(
         headless=False,
         user_data_dir=user_data_dir,
         browser_args=["--start-maximized", "--disable-notifications"]
     )
     tab = await browser.get("https://tixcraft.com/")
+    
+    # ==================================================
+    # [核心] 您的世紀大發現：CDP 監聽器
+    # ==================================================
+    async def alert_handler(event: uc.cdp.page.JavascriptDialogOpening):
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        print(f"⚡ [{timestamp}] 偵測到 Alert: {event.message} -> 秒殺！")
+        try:
+            # 嘗試標準 API
+            await tab.send(uc.cdp.page.handle_java_script_dialog(accept=True))
+        except:
+            pass
+
+    # 1. [關鍵] 啟用 Page 域 (一定要有這行，監聽器才會生效)
+    await tab.send(uc.cdp.page.enable())
+    
+    # 2. 綁定事件
+    tab.add_handler(uc.cdp.page.JavascriptDialogOpening, alert_handler)
+    
+    print("🛡️ CDP 全域彈窗防禦網已啟動！")
+    # ==================================================
+
+    try:
+        await tab.send(uc.cdp.network.enable())
+    except: pass
     
     try: await tab.evaluate("if(document.getElementById('onetrust-accept-btn-handler')){document.getElementById('onetrust-accept-btn-handler').click();}")
     except: pass
