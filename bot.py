@@ -1,5 +1,5 @@
 # bot.py (正式版 V14.0 - 世紀大發現版)
-# 基於您的發現：網頁會自動刷新，且 CDP 監聽器可以成功攔截！
+# 特性：CDP 全域監聽 + 自動刷新機制 + 會員預購支援 + 多策略選位
 
 import asyncio
 import nodriver as uc
@@ -7,7 +7,7 @@ import random
 import time
 import os
 from datetime import datetime
-from config import WANTED_TICKET_COUNT, WANTED_AREA_KEYWORD, Selector, TARGET_TIME, TIME_WATCH_URL, AREA_AUTO_SELECT_MODE, ENABLE_TIME_WATCHER
+from config import WANTED_TICKET_COUNT, WANTED_AREA_KEYWORD, Selector, TARGET_TIME, TIME_WATCH_URL, AREA_AUTO_SELECT_MODE, ENABLE_TIME_WATCHER, EXCLUDE_AREA_KEYWORD, PRE_ORDER_CODE
 from timeWatcher import TimeWatcher
 from captchaAI.predict import solve_captcha_nodriver
 
@@ -28,7 +28,7 @@ async def random_sleep(min_s=0.3, max_s=0.8):
     await asyncio.sleep(random.uniform(min_s, max_s))
 
 async def pre_fill_form(tab):
-    """預填表單"""
+    """預填表單 (mobile-select)"""
     num = WANTED_TICKET_COUNT
     js = f"""
     (function() {{
@@ -51,8 +51,8 @@ async def pre_fill_form(tab):
 
 async def submit_order_nodriver(tab, captcha_code: str):
     """
-    提交訂單 (V14.0 簡化版)
-    只負責填寫與點擊，彈窗攔截交給全域監聽器 (alert_handler)
+    提交訂單 (極簡化)
+    只負責點擊，彈窗攔截交給全域監聽器
     """
     if not captcha_code: return False
     try:
@@ -65,7 +65,7 @@ async def submit_order_nodriver(tab, captcha_code: str):
                 
                 var btn = document.querySelector('button[type="submit"]');
                 if (btn) {{
-                    // 使用 setTimeout 非同步點擊，讓 Python 不會被卡住，監聽器才能運作
+                    // 使用 setTimeout 非同步點擊，確保 Python 不會被卡住
                     setTimeout(() => btn.click(), 0);
                     return true; 
                 }}
@@ -82,17 +82,76 @@ async def submit_order_nodriver(tab, captcha_code: str):
 async def refresh_captcha_nodriver(tab):
     """手動刷新驗證碼"""
     try:
-        # 點擊圖片刷新
         await tab.evaluate(f"document.getElementById('{Selector.CAPTCHA_IMAGE[1]}').click();")
-        # print("🔄 刷新驗證碼")
         await asyncio.sleep(0.3)
         return True
     except: pass
     return False
 
 # ----------------------------------------------------
-# 頁面處理器
+# 頁面處理器 (Handlers)
 # ----------------------------------------------------
+
+# [保留] 預購碼驗證頁處理
+# bot.py (handle_verify_page 純點擊版)
+
+async def handle_verify_page(tab):
+    await check_pause()
+    
+    print(f"🔐 [驗證頁] 準備輸入預購碼: {PRE_ORDER_CODE}...")
+    
+    if not PRE_ORDER_CODE:
+        print("⚠️ 警告：未設定預購碼！請在 GUI 設定。")
+        await asyncio.sleep(1)
+        return
+
+    # [純淨版] 針對您提供的 Selector 進行精準打擊
+    # 輸入框: #form-ticket-verify ... input
+    # 按鈕: #form-ticket-verify ... button
+    verify_js = f"""
+    (function() {{
+        // 1. 定位輸入框 (鎖定在 form-ticket-verify 內)
+        var input = document.querySelector("#form-ticket-verify input[name='checkCode']");
+        
+        // 備用: 如果結構稍微變動，嘗試找 ID 或 Class
+        if (!input) input = document.querySelector("#checkCode");
+        if (!input) input = document.querySelector("input.greyInput[name='checkCode']");
+        
+        if (input) {{
+            // 2. 輸入會員碼 (觸發事件確保網頁吃到值)
+            input.focus();
+            input.value = '{PRE_ORDER_CODE}';
+            input.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            input.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            input.blur();
+            
+            // 3. 定位送出按鈕 (鎖定在 form-ticket-verify 內)
+            var btn = document.querySelector("#form-ticket-verify button[type='submit']");
+            
+            // 備用: 找 ID 或 Class
+            if (!btn) btn = document.getElementById('submitButton');
+            if (!btn) btn = document.querySelector("button.btn-primary");
+            
+            if (btn) {{
+                console.log("[Bot] 點擊送出");
+                setTimeout(() => btn.click(), 0);
+                return true;
+            }}
+        }}
+        return false;
+    }})()
+    """
+    
+    is_submitted = await tab.evaluate(verify_js)
+    
+    if is_submitted:
+        print("🚀 預購碼已送出，等待跳轉...")
+        # 送出後稍微等待，讓主迴圈去判斷網址是否變更 (進入選區)
+        await asyncio.sleep(0.5)
+    else:
+        print("❌ 找不到輸入框或按鈕 (Selector不匹配)，刷新重試...")
+        await tab.reload()
+        await asyncio.sleep(1)
 
 async def handle_game_page(tab):
     await check_pause()
@@ -142,10 +201,13 @@ async def handle_area_page(tab):
     mode_map = { "關鍵字優先": "KEYWORD", "由上而下": "TOP_DOWN", "由下而上": "BOTTOM_UP", "隨機": "RANDOM" }
     mode_js_var = mode_map.get(strategy, "KEYWORD")
 
+    # 排除關鍵字邏輯
     js_script = f"""
     (function() {{
         const mode = '{mode_js_var}';
         const keyword = '{WANTED_AREA_KEYWORD}';
+        const excludes = '{EXCLUDE_AREA_KEYWORD}'.split(';');
+        
         document.querySelectorAll("footer, img, header").forEach(e => e.remove());
         let links = Array.from(document.querySelectorAll('.select_form_a a, .select_form_b a, .zone a'));
         let validLinks = links.filter(link => {{
@@ -153,9 +215,15 @@ async def handle_area_page(tab):
             if (link.classList.contains('disabled')) return false;
             if (text.includes('售完') || text.includes('Soldout')) return false;
             if (text.includes('剩餘0')) return false;
+            
+            for (let ex of excludes) {{
+                if (ex && ex.trim() !== "" && text.includes(ex.trim())) {{ return false; }}
+            }}
             return true;
         }});
+        
         if (validLinks.length === 0) return false; 
+
         let targetLink = null;
         if (mode === 'KEYWORD') {{
             targetLink = validLinks.find(link => link.innerText.replace(/\\s/g, '').includes(keyword));
@@ -183,28 +251,28 @@ async def handle_ticket_page(tab):
     await check_pause()
     print("📝 [填單頁] 處理中...")
     
-    # 不強制刷新，保留第一張圖
+    # 第一次進來不刷圖 (保留第一張)
     
     await pre_fill_form(tab)
     captcha_code = await solve_captcha_nodriver(tab)
+    
     await check_pause()
 
     if captcha_code and len(captcha_code) == 4:
         print(f"🚀 送出: {captcha_code}")
         
-        # 只負責點擊，如果有彈窗，alert_handler 會秒殺它
+        # 點擊送出 -> 觸發頁面 Reload -> 觸發 Alert -> 監聽器秒殺 -> 頁面完成 Reload (圖片換新)
         await submit_order_nodriver(tab, captcha_code)
         
-        # 等待 0.5 秒檢查結果
+        # 等待 0.5 秒 (給予監聽器反應時間)
         await asyncio.sleep(0.5)
         
         try:
             current_url = await tab.evaluate("window.location.href")
             if "/ticket/ticket" in current_url:
-                # 網址沒變 = 失敗 (彈窗已被監聽器按掉)
+                # 如果還在原頁面，代表驗證碼錯了 (Alert 已被監聽器按掉，網頁已刷新)
+                # 我們直接 return，讓主迴圈重新進來辨識新圖
                 print("⚠️ 驗證碼錯誤 (Alert已攔截)，原地重試...")
-                # 因為彈窗關閉後，拓元通常會自動刷新驗證碼，所以我們不需要手動刷新
-                # 直接 return，讓 main loop 再次進來辨識新圖即可
                 return 
         except: pass
     else:
@@ -213,7 +281,7 @@ async def handle_ticket_page(tab):
         await asyncio.sleep(0.2)
 
 # ----------------------------------------------------
-# 啟動流程 (核心修改：加入 Alert 監聽器)
+# 啟動流程 (CDP 監聽器搭載)
 # ----------------------------------------------------
 
 async def run_initial_setup():
@@ -221,7 +289,6 @@ async def run_initial_setup():
     
     import os
     user_data_dir = os.path.abspath("./chrome_profile")
-
     
     browser = await uc.start(
         headless=False,
@@ -231,24 +298,21 @@ async def run_initial_setup():
     tab = await browser.get("https://tixcraft.com/")
     
     # ==================================================
-    # [核心] 您的世紀大發現：CDP 監聽器
+    # [核心] CDP 事件監聽器 (Alert Killer)
     # ==================================================
     async def alert_handler(event: uc.cdp.page.JavascriptDialogOpening):
         timestamp = datetime.now().strftime("%H:%M:%S")
         print(f"⚡ [{timestamp}] 偵測到 Alert: {event.message} -> 秒殺！")
         try:
-            # 嘗試標準 API
+            # [修正] 使用您測試成功的 API 方法
             await tab.send(uc.cdp.page.handle_java_script_dialog(accept=True))
         except:
             pass
 
-    # 1. [關鍵] 啟用 Page 域 (一定要有這行，監聽器才會生效)
+    # 1. 啟用 Page 域
     await tab.send(uc.cdp.page.enable())
-    
     # 2. 綁定事件
     tab.add_handler(uc.cdp.page.JavascriptDialogOpening, alert_handler)
-    
-    print("🛡️ CDP 全域彈窗防禦網已啟動！")
     # ==================================================
 
     try:

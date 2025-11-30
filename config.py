@@ -14,17 +14,17 @@ MODEL_PATH = os.path.join(CAPTCHA_MODEL_DIR, MODEL_FILENAME)
 TIXCRAFT_URL = "https://tixcraft.com/"
 WANTED_TICKET_COUNT = "2"
 
-# 選位策略: "關鍵字優先", "由上而下", "由下而上", "隨機"
+# 選位策略
 AREA_AUTO_SELECT_MODE = "由上而下"
 WANTED_AREA_KEYWORD = ""
-
-# [新增] 排除關鍵字 (以分號 ; 分隔)
-# 凡是區域名稱包含這些字詞的，機器人一律跳過
 EXCLUDE_AREA_KEYWORD = "輪椅;身障;身心;障礙;Restricted View;燈柱遮蔽;視線不完整"
+
+# [新增] 預購碼 / 驗證碼 (優先購專用)
+PRE_ORDER_CODE = ""
 
 # --- 時間與監控 ---
 ENABLE_TIME_WATCHER = False
-TARGET_TIME = "13:00:00"
+TARGET_TIME = "12:00:00"
 TIME_WATCH_URL = "https://tixcraft.com/activity/game/25_whyte"
 
 # --- 網頁元素選擇器 ---
@@ -42,3 +42,7 @@ class Selector:
     CAPTCHA_IMAGE = (By.ID, "TicketForm_verifyCode-image")
     CAPTCHA_INPUT = (By.ID, "TicketForm_verifyCode")
     CONFIRM_PURCHASE = (By.CSS_SELECTOR, 'button[type="submit"]')
+    
+    # [新增] 驗證頁元素
+    VERIFY_INPUT = (By.ID, "checkCode")
+    VERIFY_BTN = (By.CLASS_NAME, "btn-primary")
