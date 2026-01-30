@@ -73,7 +73,7 @@ class TimeWatcher:
             remaining = (self.target_time - current_server_time).total_seconds()
             
             # 時間到：提早 0.05 秒回傳，讓 bot.py 有時間反應
-            if remaining <= 1:
+            if remaining <= 0.05:
                 print("\n⚡⚡⚡ 時間到！啟動瀏覽器搶票！ ⚡⚡⚡")
                 return True
             

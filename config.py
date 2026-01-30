@@ -3,6 +3,11 @@
 from selenium.webdriver.common.by import By
 import os
 
+
+# --- 平台選擇 ---
+# "TIXCRAFT" = 拓元 / "KKTIX" = KKTIX
+PLATFORM = "KKTIX"
+
 # --- Selenium/Web 設定 ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CAPTCHA_DATASET_DIR = os.path.join(BASE_DIR, "captchaAI", "dataset")
@@ -12,20 +17,23 @@ MODEL_PATH = os.path.join(CAPTCHA_MODEL_DIR, MODEL_FILENAME)
 
 # --- 搶票參數 ---
 TIXCRAFT_URL = "https://tixcraft.com/"
-WANTED_TICKET_COUNT = "2"
+WANTED_TICKET_COUNT = "1"
 
 # 選位策略
-AREA_AUTO_SELECT_MODE = "由上而下"
-WANTED_AREA_KEYWORD = ""
+AREA_AUTO_SELECT_MODE = "關鍵字優先"
+WANTED_AREA_KEYWORD = "3280"
 EXCLUDE_AREA_KEYWORD = "輪椅;身障;身心;障礙;Restricted View;燈柱遮蔽;視線不完整"
 
 # [新增] 預購碼 / 驗證碼 (優先購專用)
 PRE_ORDER_CODE = ""
 
+# [V15.0 新增] 日期關鍵字
+WANTED_DATE_KEYWORD = "2/8"
+
 # --- 時間與監控 ---
 ENABLE_TIME_WATCHER = False
-TARGET_TIME = "12:00:00"
-TIME_WATCH_URL = "https://tixcraft.com/activity/game/25_whyte"
+TARGET_TIME = "01:29:30"
+TIME_WATCH_URL = "https://i-chen.kktix.cc/events/c7df2df8"
 
 # --- 網頁元素選擇器 ---
 class Selector:
